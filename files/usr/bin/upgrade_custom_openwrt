@@ -46,5 +46,6 @@ else
   else
     echo "*** NO NEW FIRMWARE FOUND ***"
   fi
+  rm -f /var/run/upgrade_openwrt
 fi
 } 2>&1 | tee /dev/stderr | logger $([ ${DEBUG+x} ] && echo '-p user.debug') -t "$(basename "$0" | grep -Eo '^.{0,23}')"[$$]
