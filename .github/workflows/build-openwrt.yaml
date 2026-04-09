@@ -55,13 +55,13 @@ jobs:
           sudo apt autoremove -y && sudo apt clean -y
 
       - name: Checkout remote repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ env.REMOTE_REPOSITORY }}
           ref: ${{ needs.check_commits.outputs.remote_branch }}
 
       - name: Checkout current repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           path: "builder_repo"
 
@@ -102,7 +102,7 @@ jobs:
           cd firmware && sha256sum openwrt-*-sysupgrade.bin >sha256sums ||:
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: gl-mt6000-firmware
           path: firmware/*
