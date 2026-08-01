@@ -1,0 +1,4 @@
+chain upload_limit_egress {
+    type filter hook postrouting priority 100; policy accept;
+    ether saddr { 1E:52:EC:97:0F:F8 } oifname "eth1" limit rate over 400 kbytes/second drop
+}
