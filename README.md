@@ -92,9 +92,7 @@ Anything that only ever existed on the live router is lost on a factory reset. T
 - [`zzz-agh-archive.sh`](files/lib/upgrade/zzz-agh-archive.sh) — sysupgrade hook, see below
 - [`sysupgrade.conf`](files/etc/sysupgrade.conf) — the keep list itself
 - [`10-upload-limit.nft`](files/etc/nftables.d/10-upload-limit.nft) — per-MAC egress rate limit
-- [`apk-cheatsheet.sh`](files/etc/profile.d/apk-cheatsheet.sh) — opkg-to-apk reminder on login
 - [`htoprc`](files/root/.config/htop/htoprc) — htop column layout
-- `roblox-iplist.txt` — CIDR list for policy routing
 
 ### AdGuardHome data
 
