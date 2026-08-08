@@ -7,8 +7,8 @@ uci -q batch << EOI
 # Wireless radio0 specific settings
 set wireless.radio0.country='DE'
 set wireless.radio0.band='2g'
-set wireless.radio0.channel='11'
-set wireless.radio0.htmode='HE40'
+set wireless.radio0.channel='13'
+set wireless.radio0.htmode='HE20'
 set wireless.radio0.txpower='20'
 set wireless.radio0.cell_density='0'
 set wireless.radio0.vendor_vht='1'
