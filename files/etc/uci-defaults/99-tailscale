@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Tailscale boot enablement.
+#
+# The OpenWrt tailscale package does not enable /etc/init.d/tailscale on
+# install, and /etc/rc.d is not preserved by sysupgrade. The
+# luci-app-tailscale-community init (tailscale-settings) only runs
+# apply_settings on boot -- it does not start the daemon -- so without this
+# tailscaled never comes back after a flash.
+#
+# Settings are only seeded when absent, so values carried over by sysupgrade
+# are never clobbered. Seeding only matters after a factory reset.
+
+/etc/init.d/tailscale enable
+/etc/init.d/tailscale-settings enable
+
+[ -n "$(uci -q get tailscale.settings)" ] || exit 0
+
+[ -n "$(uci -q get tailscale.settings.service_enabled)" ] || \
+	uci -q set tailscale.settings.service_enabled='1'
+[ -n "$(uci -q get tailscale.settings.accept_routes)" ] || \
+	uci -q set tailscale.settings.accept_routes='1'
+[ -n "$(uci -q get tailscale.settings.state_file)" ] || \
+	uci -q set tailscale.settings.state_file='/etc/tailscale/tailscaled.state'
+[ -n "$(uci -q get tailscale.settings.fw_mode)" ] || \
+	uci -q set tailscale.settings.fw_mode='nftables'
+
+if [ -z "$(uci -q get tailscale.settings.advertise_routes)" ]; then
+	uci -q add_list tailscale.settings.advertise_routes='10.10.10.0/24'
+	uci -q add_list tailscale.settings.advertise_routes='10.10.20.0/24'
+	uci -q add_list tailscale.settings.advertise_routes='10.10.3.0/24'
+	uci -q add_list tailscale.settings.advertise_routes='10.10.4.0/24'
+fi
+
+uci -q commit tailscale
+
+exit 0
