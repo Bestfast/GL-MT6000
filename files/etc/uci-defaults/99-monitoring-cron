@@ -1,0 +1,20 @@
+#!/bin/sh
+# Install the monitoring/network cron jobs on first boot.
+#
+# The scripts themselves live in files/ (committed) or are retained via
+# sysupgrade; this just guarantees their schedules exist after a fresh flash.
+# Idempotent: only appends entries that are not already present.
+
+C=/etc/crontabs/root
+touch "$C"
+
+add() { grep -qF "$1" "$C" || echo "$1" >> "$C"; }
+
+add '* * * * * /usr/bin/qosmate-prom'
+add '* * * * * /usr/bin/nlbwmon-prom'
+add '*/5 * * * * /usr/sbin/dhcp-metrics.sh'
+
+chmod 600 "$C"
+/etc/init.d/cron restart
+
+exit 0

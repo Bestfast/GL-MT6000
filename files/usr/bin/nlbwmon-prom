@@ -1,0 +1,38 @@
+#!/bin/sh
+# nlbwmon -> Prometheus textfile exporter (per-LAN-client byte counters).
+#
+# nlbwmon tracks per-MAC/client byte totals in its database. `nlbw -c json`
+# returns the current accounting-period totals per MAC. We republish them as
+# cumulative *_total counters so Prometheus `rate()` gives per-client bitrate
+# (and `increase()` gives per-period volume). Counter resets on nlbwmon's daily
+# commit are handled by rate()/increase().
+#
+# Emits:
+#   lan_client_rx_bytes_total{mac}   (download, bytes)
+#   lan_client_tx_bytes_total{mac}   (upload,   bytes)
+#
+# Join with lan_client_mac{mac,name} for hostnames in Grafana.
+# Must be world-readable (node_exporter runs as `prometheus`).
+# Keeps the previous file on failure so a transient error doesn't blank panels.
+
+OUT_DIR="/var/prometheus"
+OUT="${OUT_DIR}/nlbwmon.prom"
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+mkdir -p "$OUT_DIR"
+
+/usr/sbin/nlbw -c json -g mac -o rx,tx 2>/dev/null | jq -r '
+  .data[]?
+  | select(.[0] != "00:00:00:00:00:00")
+  | (.[0] | ascii_upcase) as $mac
+  | "lan_client_rx_bytes_total{mac=\"\($mac)\"} \(.[2] // 0)",
+    "lan_client_tx_bytes_total{mac=\"\($mac)\"} \(.[4] // 0)"
+' > "$TMP" 2>/dev/null
+
+if [ -s "$TMP" ]; then
+    cp "$TMP" "$OUT"
+    chmod 644 "$OUT"
+fi
+
+exit 0

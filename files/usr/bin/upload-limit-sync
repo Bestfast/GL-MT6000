@@ -1,0 +1,37 @@
+#!/bin/sh
+# Generate the client upload-rate-limit nftables chain from /etc/upload-limit.conf.
+#
+# The real device MAC(s) are NOT kept in this (public) repository. They live in
+# /etc/upload-limit.conf, which is retained across sysupgrade (see
+# /etc/sysupgrade.conf) but never committed. This script renders
+# /etc/nftables.d/10-upload-limit.nft (included by fw4) from that config and
+# reloads the firewall. Run at boot from /etc/rc.local and manually after edits.
+#
+# /etc/upload-limit.conf format (shell-sourced):
+#   MAC="1e:52:ec:97:0f:f8  aa:bb:cc:dd:ee:ff"   # space/comma separated
+#   IFACE="eth1"                                  # optional, default eth1
+#   RATE="400 kbytes/second"                      # optional
+#
+# Without the config, the committed chain stays empty (no rate limit applied).
+
+CONF="/etc/upload-limit.conf"
+OUT="/etc/nftables.d/10-upload-limit.nft"
+
+[ -f "$CONF" ] || exit 0
+# shellcheck disable=SC1090
+. "$CONF"
+[ -n "$MAC" ] || exit 0
+
+RATE="${RATE:-400 kbytes/second}"
+IFACE="${IFACE:-eth1}"
+
+cat > "$OUT" <<EOF
+chain upload_limit_egress {
+    type filter hook postrouting priority 100; policy accept;
+    ether saddr { $MAC } oifname "$IFACE" limit rate over $RATE drop
+}
+EOF
+
+fw4 reload 2>/dev/null || /etc/init.d/firewall reload
+
+exit 0

@@ -1,0 +1,87 @@
+#!/bin/sh
+# QoSmate (SQM) -> Prometheus textfile exporter for the OpenWrt node-exporter.
+#
+# Reads live qdisc/rule counters from the qosmate LuCI rpcd backend over ubus
+# and writes them into the node-exporter textfile collector directory, so they
+# are scraped like every other node_* metric (-> Prometheus -> VictoriaMetrics).
+#
+# Metrics emitted (all counters are cumulative, use rate() in Grafana):
+#   qosmate_qdisc_bytes_total{dev,tin}            per diffserv tin sent bytes
+#   qosmate_qdisc_packets_total{dev,tin}
+#   qosmate_qdisc_drops_total{dev,tin}
+#   qosmate_qdisc_ecn_marks_total{dev,tin}
+#   qosmate_qdisc_ack_drops_total{dev,tin}
+#   qosmate_qdisc_tin_threshold_rate_bps{dev,tin} tin threshold (gauge)
+#   qosmate_qdisc_tin_avg_delay_us{dev,tin}       tin avg delay (gauge)
+#   qosmate_qdisc_tin_peak_delay_us{dev,tin}      tin peak delay (gauge)
+#   qosmate_qdisc_backlog_bytes{dev,tin}          current backlog (gauge)
+#   qosmate_qdisc_total_{bytes,packets,drops}_total{dev}
+#   qosmate_qdisc_backlog_bytes_current{dev}
+#   qosmate_qdisc_capacity_estimate_bps{dev}
+#   qosmate_qdisc_memory_used_bytes{dev}
+#   qosmate_rule_packets_total{rule}
+#   qosmate_rule_bytes_total{rule}
+#   qosmate_up
+#
+# Textfile gotcha: file must be world-readable (node_exporter runs as
+# `prometheus`); mktemp gives 600 -> chmod 644.
+
+set -eu
+
+OUT_DIR="/var/prometheus"
+OUT="${OUT_DIR}/qosmate.prom"
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+mkdir -p "$OUT_DIR"
+
+emit_up() {
+    printf 'qosmate_up %s\n' "$1" > "$TMP"
+}
+
+# ---- gather ----
+STATS="$(ubus call luci.qosmate_stats getStats 2>/dev/null)" || STATS=""
+RULES="$(ubus call luci.qosmate_stats getRuleCounters 2>/dev/null)" || RULES=""
+
+if [ -z "$STATS" ]; then
+    emit_up 0
+else
+    emit_up 1
+
+    # qdisc level + per-tin
+    echo "$STATS" | jq -r '
+      .qdisc_stats[]? as $q
+      | $q.dev as $dev
+      | "qosmate_qdisc_total_bytes_total{dev=\"\($dev)\"} \($q.bytes // 0)",
+        "qosmate_qdisc_total_packets_total{dev=\"\($dev)\"} \($q.packets // 0)",
+        "qosmate_qdisc_total_drops_total{dev=\"\($dev)\"} \($q.drops // 0)",
+        "qosmate_qdisc_backlog_bytes_current{dev=\"\($dev)\"} \($q.backlog // 0)",
+        "qosmate_qdisc_capacity_estimate_bps{dev=\"\($dev)\"} \($q.capacity_estimate // 0)",
+        "qosmate_qdisc_memory_used_bytes{dev=\"\($dev)\"} \($q.memory_used // 0)",
+        ( $q.tins // [] | to_entries[]? 
+          | .key as $i | .value as $t
+          | "qosmate_qdisc_bytes_total{dev=\"\($dev)\",tin=\"\($i)\"} \($t.sent_bytes // 0)",
+            "qosmate_qdisc_packets_total{dev=\"\($dev)\",tin=\"\($i)\"} \($t.sent_packets // 0)",
+            "qosmate_qdisc_drops_total{dev=\"\($dev)\",tin=\"\($i)\"} \($t.drops // 0)",
+            "qosmate_qdisc_ecn_marks_total{dev=\"\($dev)\",tin=\"\($i)\"} \($t.ecn_mark // 0)",
+            "qosmate_qdisc_ack_drops_total{dev=\"\($dev)\",tin=\"\($i)\"} \($t.ack_drops // 0)",
+            "qosmate_qdisc_tin_threshold_rate_bps{dev=\"\($dev)\",tin=\"\($i)\"} \($t.threshold_rate // 0)",
+            "qosmate_qdisc_tin_avg_delay_us{dev=\"\($dev)\",tin=\"\($i)\"} \($t.avg_delay_us // 0)",
+            "qosmate_qdisc_tin_peak_delay_us{dev=\"\($dev)\",tin=\"\($i)\"} \($t.peak_delay_us // 0)",
+            "qosmate_qdisc_backlog_bytes{dev=\"\($dev)\",tin=\"\($i)\"} \($t.backlog_bytes // 0)"
+        )
+    ' >> "$TMP"
+
+    # per-rule counters
+    if [ -n "$RULES" ]; then
+        echo "$RULES" | jq -r '
+          .rule_counters[]?
+          | "qosmate_rule_packets_total{rule=\"\(.rule_name)\"} \(.total_packets // 0)",
+            "qosmate_rule_bytes_total{rule=\"\(.rule_name)\"} \(.total_bytes // 0)"
+        ' >> "$TMP"
+    fi
+fi
+
+# atomic-ish publish, readable by the prometheus user
+cp "$TMP" "$OUT"
+chmod 644 "$OUT"

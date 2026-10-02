@@ -1,0 +1,14 @@
+# Client upload-rate-limit config. Copy to /etc/upload-limit.conf (NOT committed
+# to the public repo; it is retained via /etc/sysupgrade.conf) and fill in the
+# real client MAC(s). /usr/bin/upload-limit-sync renders the nftables chain.
+#
+# Format:
+#   MAC="1e:52:ec:97:0f:f8"                       # one or more, space separated
+#   IFACE="eth1"                                  # optional (default eth1)
+#   RATE="400 kbytes/second"                      # optional
+#
+# Apply with: /usr/bin/upload-limit-sync
+
+MAC=""
+IFACE="eth1"
+RATE="400 kbytes/second"
