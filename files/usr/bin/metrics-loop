@@ -1,0 +1,21 @@
+#!/bin/sh
+# /usr/bin/metrics-loop -- periodic runner for the router textfile metric shims.
+#
+# BusyBox cron has 60s granularity; for sub-minute cadence we loop with sleep in
+# a procd service. Usage: metrics-loop <interval-seconds> <command...>
+#
+# A re-entrancy guard prevents overlapping runs if a command outlives its
+# interval (e.g. qosmate-prom ~2s is fine at 5s, but a slow tick won't stack).
+
+INTERVAL="$1"; shift
+[ -n "$INTERVAL" ] || INTERVAL=15
+
+LOCK="/tmp/$(basename "$1").lock"
+
+while :; do
+    if mkdir "$LOCK" 2>/dev/null; then
+        "$@" >/dev/null 2>&1
+        rmdir "$LOCK" 2>/dev/null
+    fi
+    sleep "$INTERVAL"
+done
