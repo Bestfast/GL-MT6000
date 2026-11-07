@@ -2,7 +2,7 @@
 
 This repository automates the process of building OpenWrt custom firmware images for **MY** Flint 2 (GL-MT6000) router, based on **MY PREFERENCES** and [pesa1234](https://github.com/pesa1234)'s work.
 
-This is a fork of [cjom/GL-MT6000](https://github.com/cjom/GL-MT6000) and has diverged from it: AdBlock Fast has been replaced with AdGuardHome, banip and CrowdSec have been added, and `files/` carries router-specific customizations that upstream does not have.
+This is a fork of [cjom/GL-MT6000](https://github.com/cjom/GL-MT6000) and has diverged from it: AdBlock Fast has been replaced with AdGuardHome, CrowdSec has been added (banip was tried and later retired — see `20-flood-limits.nft`), and `files/` carries router-specific customizations that upstream does not have.
 
 You should **not use** the firmwares released in this repository unless you have the same preferences/needs.
 Instead, **make a fork and adapt to your needs**.
@@ -14,7 +14,7 @@ Compared to his custom firmware, this firmware adds:
 - **Wireguard VPN**
 - **Policy Based Routing** (select what goes through VPN and what not)
 - **AdGuardHome** (ads and malware blocking at DNS level, with a web UI)
-- **banip** and **CrowdSec firewall bouncer** (IP reputation blocking)
+- **CrowdSec firewall bouncer** (IP reputation blocking). banip is no longer in the image: it was retired in favour of CrowdSec plus the hand-written WAN flood limits
 - **Custom Attended Sysupgrade** (install custom firmware from GitHub)
 
 And also:
@@ -128,13 +128,24 @@ Three deliberate properties:
 
 ### qosmate
 
-[qosmate](https://github.com/hudra0/qosmate) is installed outside the package manager, so nothing in the image restores it. It is not vendored into this repository — instead `sysupgrade.conf` preserves all of it, including the LuCI web UI under `/www/luci-static/resources/view/qosmate` and the rpcd backends, which the original four-line entry was missing.
+[qosmate](https://github.com/hudra0/qosmate) is installed outside the package manager. Everything it needs — `/etc/qosmate.sh`, the autorelate scripts, the init scripts, the rpcd backends, the LuCI menu/acl json and the web UI under `/www/luci-static/resources/view/qosmate` — is **vendored into `files/`** as a snapshot of the version running on the router, so a clean rebuild or factory reset restores a working qosmate with no network fetch. `sysupgrade.conf` still lists all of it, which is what carries it across a plain sysupgrade where `files/` is not involved.
 
-After a **factory reset** qosmate must be reinstalled from upstream; the keep list only covers sysupgrade.
+Vendoring means the snapshot goes stale: after any upstream qosmate update the copies in `files/` must be refreshed from the live router, or a factory reset reinstalls the old version. `/etc/config/qosmate` (the tuning below) is `/etc` state, kept automatically by sysupgrade and deliberately not in git.
+
+#### Live tuning (2026-08)
+
+The config is UCI state on the live router, not in this repo — `sysupgrade` carries `/etc/config/qosmate`, so it survives a flash and is pulled nightly by the backup stack. These are the settings and the reasoning, in case a replacement router or a reinstall needs them reapplied:
+
+- **`settings.ROOT_QDISC = cake`** (was `hybrid`). Hybrid leaves the CAKE class at `bandwidth unlimited`, so there is no active AQM on the best-effort class — HFSC just tail-drops and latency under load climbed to ~32 ms. Cake as root with `diffserv4` does real AQM (<10 ms added), and gaming traffic (marked `cs5` by the nft rules) lands in the Voice tin.
+- **`settings.DOWNRATE = 940000`, `settings.UPRATE = 44000`** (was 800000/30000). The line measures ~870–900 down / ~49 up. 940 sits at the edge: on an average day the cap idles and you get line speed (~850–870 measured, grade A bufferbloat); on a good day (line ≥ ~950) cake engages and you get A+ latency at ~850.
+- **`cake.USE_MQ = 0`**. `cake_mq` (multi-queue IFB) cut forwarded throughput ~20% on this hardware (measured 701 vs 897 Mbit/s) — single-queue cake is faster here.
+- **Download-direction bulk rules** were added (`dest_ip`/`dest_port`, e.g. `documents_qbit_bulk_dl`: `th dport 6881 ip daddr 10.10.4.54`). The stock rules only match `th sport` (the upload leg); torrent *download* data (peer → local:6881) has a random source port and was left unclassified as Best Effort, so qbit competed with interactive traffic at equal priority.
+
+Measurement notes: run **one** speed/bufferbloat test at a time — a waveform.com test in a browser tab and a CLI test on the router pollute each other (both were misread as a "degraded line" before this was spotted). Test from a client, not the router; the router-originated path skips the forward hook and understates CPU cost.
 
 ### Not in this repository
 
-This repo is public, so router state containing secrets is deliberately excluded and must be backed up separately: SSH host keys, `/root/.ssh/authorized_keys`, the uhttpd TLS key, `/etc/config/wireless` (WiFi PSKs) and `/etc/adguardhome/adguardhome.yaml` (password hash). All of these are already covered by the sysupgrade keep list, so they survive a flash — they just are not, and should not be, in git.
+This repo is public, so router state containing secrets is deliberately excluded and must be backed up separately: SSH host keys, `/root/.ssh/authorized_keys`, the uhttpd TLS key, `/etc/config/wireless` (WiFi PSKs), `/etc/config/ddns` (plaintext DDNS password), `/etc/neigh6.conf` and `/etc/upload-limit.conf` (AdGuard API password / per-device MACs) and `/etc/adguardhome/adguardhome.yaml` (password hash). All of these are covered by the sysupgrade keep list, so they survive a flash — they just are not, and should not be, in git. The vendored qosmate files are upstream code only; nothing router-specific or secret is in them.
 
 ## Contributing
 

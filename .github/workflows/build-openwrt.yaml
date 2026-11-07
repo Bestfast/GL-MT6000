@@ -79,6 +79,14 @@ jobs:
           patch -p1 < builder_repo/attendedsysupgrade-with-GitHub.patch
           mv -v builder_repo/files ./
           chmod -v 755 files/usr/bin/upgrade_custom_openwrt files/www/cgi-bin/github_*
+          # Exec bits are not reliable on a Windows checkout, and everything under
+          # these paths is invoked directly (cron, hotplug, init, rpcd, upgrader).
+          find files/usr/bin files/usr/sbin files/etc/init.d files/etc/hotplug.d \
+               files/etc/uci-defaults files/lib/upgrade files/etc/qosmate.d \
+               files/usr/libexec/rpcd \
+               -type f -exec chmod 755 {} + 2>/dev/null || true
+          chmod 755 files/etc/qosmate*.sh 2>/dev/null || true
+          chmod 644 files/www/luci-static/resources/view/qosmate/*.js 2>/dev/null || true
           mv -v builder_repo/${{ env.CONFIG_FILE }} .config
           rm -rfv builder_repo
           make defconfig

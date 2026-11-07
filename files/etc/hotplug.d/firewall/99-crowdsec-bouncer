@@ -1,0 +1,16 @@
+#!/bin/sh
+# Restart the CrowdSec firewall bouncer after a firewall reload so its nftables
+# sets are re-created. Backgrounded with a short delay: the hook runs while fw4
+# is still rebuilding, and restarting too early just wedges it again.
+
+[ "$ACTION" = "reload" ] || exit 0
+[ -x /etc/init.d/crowdsec-firewall-bouncer ] || exit 0
+/etc/init.d/crowdsec-firewall-bouncer enabled || exit 0
+
+(
+  sleep 10
+  /etc/init.d/crowdsec-firewall-bouncer restart
+  logger -t crowdsec-hook "restarted firewall bouncer after firewall $ACTION"
+) >/dev/null 2>&1 &
+
+exit 0

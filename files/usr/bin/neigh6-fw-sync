@@ -1,0 +1,84 @@
+#!/bin/sh
+# neigh6-fw-sync - keep a firewall src_mac rule pointed at a device whose MAC
+# rotates (iOS Private Wi-Fi Address), using the neigh6 database.
+#
+# iOS re-randomises its Wi-Fi MAC per network, so a rule that matches a fixed
+# ether saddr goes stale the moment the address rotates. The neigh6 tooling
+# already resolves addr -> MAC -> name every minute into /opt/neigh6/db; this
+# follows the NAME, not a pinned MAC, and rewrites the rule's src_mac list with
+# every MAC the device has been seen using recently.
+#
+# Same pattern as qosmate-ipv6-sync: read the DB, rewrite uci rules by section
+# name, reload only when something changed.
+#
+# Keying on a hardcoded MAC would be circular - that is the value that rotates.
+# Always match on the DHCP hostname (column 3 of the DB).
+#
+# Run from cron. Usage:
+#   neigh6-fw-sync            sync once
+#   neigh6-fw-sync -n         dry run, print what would change
+
+set -u
+
+DB=/opt/neigh6/db
+LOG_TAG=neigh6-fw-sync
+# How recently the device must have been seen (seconds) for its MAC to count.
+# Two hours keeps the previous MAC briefly after a rotation, which is harmless
+# (same device) and avoids a gap while the new entry settles.
+FRESH_SECS=7200
+
+# rule-name|device-hostname pairs. Add more lines as needed.
+RULES="iPad-Gabriele|iPad"
+
+DRY=0
+for a in "$@"; do
+	case "$a" in
+		-n|--dry-run) DRY=1 ;;
+		*) echo "unknown option: $a" >&2; exit 2 ;;
+	esac
+done
+
+[ -f "$DB" ] || exit 0
+
+now=$(date +%s)
+rc=0
+
+printf '%s\n' "$RULES" | while IFS='|' read -r rule dev; do
+	[ -n "$rule" ] && [ -n "$dev" ] || continue
+
+	# Firewall rules are anonymous uci sections; address them by the section
+	# their name option belongs to (same trick qosmate-ipv6-sync uses).
+	sec=$(uci show firewall | sed -n "s/^firewall\.\(@rule\[[0-9]*\]\)\.name='$rule'$/\1/p" | head -1)
+	if [ -z "$sec" ]; then
+		[ -t 1 ] && echo "neigh6-fw-sync: no firewall rule named '$rule'" >&2
+		continue
+	fi
+
+	# Every MAC the device has used inside the freshness window, v4 or v6.
+	macs=$(awk -F'\t' -v n="$dev" -v now="$now" -v win="$FRESH_SECS" '
+		$3 == n && $4 + win >= now { print $2 }
+	' "$DB" | sort -u)
+	# No sighting: leave the rule untouched rather than clearing it, so a
+	# transient DB gap does not open the block.
+	[ -n "$macs" ] || continue
+
+	new=$(printf '%s\n' $macs | tr '\n' ' ' | sed 's/ $//')
+	state=/tmp/.neigh6-fw-$(printf '%s' "$rule" | tr -c 'A-Za-z0-9' _)
+	[ -f "$state" ] && [ "$(cat "$state")" = "$new" ] && continue
+
+	if [ "$DRY" = "1" ]; then
+		printf '%s: src_mac -> %s\n' "$rule" "$new"
+		continue
+	fi
+
+	uci -q delete "firewall.$sec.src_mac"
+	for m in $macs; do
+		uci add_list "firewall.$sec.src_mac=$m"
+	done
+	uci commit firewall
+	fw4 reload
+	printf '%s' "$new" > "$state"
+	logger -t "$LOG_TAG" "rule '$rule' src_mac -> $new"
+done
+
+exit $rc

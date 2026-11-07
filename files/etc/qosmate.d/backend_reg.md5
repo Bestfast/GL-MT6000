@@ -1,0 +1,11 @@
+dae86f878c2ebff5a7c371ddd5eca195  /etc/init.d/qosmate
+1056b6268a4d0b4e75506a4bf0aea981  /etc/qosmate.sh
+cd079841cddeac425020af92e9e6a4db  /etc/qosmate.d/qosmate-defaults
+8de3441b247c82c685583e3325dae293  /etc/qosmate-autorate.sh
+72dea0fde1ea7ec2ba72c5872569a332  /etc/qosmate-autorate-tc.sh
+3259b8662125f4d030404b4d13e5e55b  /etc/init.d/qosmate-autorate
+32d5f0b1f04cacd4cee8402dcec2771c  /usr/lib/tc/experimental.dist
+626e11ff9046fcbc8dc802083fd8ccfa  /usr/lib/tc/normal.dist
+0f60726d6593bbef51fa35ef429ddd2c  /usr/lib/tc/normmix20-64.dist
+1fe892ea38e4372e1cd7f960d35afba4  /usr/lib/tc/pareto.dist
+86e236e55c533976f302f1498a2da3b5  /usr/lib/tc/paretonormal.dist

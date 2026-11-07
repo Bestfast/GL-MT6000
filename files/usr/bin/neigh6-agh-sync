@@ -1,0 +1,207 @@
+#!/bin/sh
+# neigh6-agh-sync - keep AdGuard persistent clients matching their IPv6 addresses.
+#
+# AdGuard matches a persistent client by identifier, not by resolved name, so a
+# PTR record alone does not make per-client rules apply to an IPv6 address. MAC
+# identifiers only work when AdGuard is itself the DHCP server, which it is not
+# here (dnsmasq is). That leaves one option: put the actual addresses in the
+# client's ids list and keep them current as privacy addresses rotate.
+#
+# For every persistent client that carries at least one MAC id, this pushes the
+# addresses that /usr/bin/neigh6-hosts has recorded for that MAC. Addresses it
+# added are tracked in a state file, so it only ever removes its own entries -
+# ids added by hand are left alone.
+#
+# Usage:
+#   neigh6-agh-sync            sync once
+#   neigh6-agh-sync -n         dry run, print what would change
+#   neigh6-agh-sync --adopt    also take ownership of IP ids already present on
+#                              MAC-bearing clients, so stale hand-added
+#                              addresses get pruned from then on
+#
+# Credentials live in /etc/neigh6.conf (chmod 600):
+#   AGH_URL=http://10.10.10.1:8080
+#   AGH_USER=...
+#   AGH_PASS=...
+#
+# Devices whose MAC rotates (iOS Private Wi-Fi Address) cannot use the MAC
+# anchor at all - the MAC is the value that changes. List them by hand so the
+# client follows the DHCP hostname instead:
+#   AGH_NAME_MAP="iPad Gabriele|iPad"
+# ';'-separated "AdGuard client name|dhcp hostname" pairs; comma-separate
+# several hostnames for one client. Such clients are fully owned by this
+# script (their IP ids are retired when no longer current).
+
+set -u
+
+CONF=/etc/neigh6.conf
+DB=/opt/neigh6/db
+STATE=/opt/neigh6/managed
+RETENTION_HOURS=${RETENTION_HOURS:-48}
+AGH_NAME_MAP=${AGH_NAME_MAP:-}
+
+DRY=0
+ADOPT=0
+for a in "$@"; do
+	case "$a" in
+		-n|--dry-run) DRY=1 ;;
+		--adopt)      ADOPT=1 ;;
+		*) echo "unknown option: $a" >&2; exit 2 ;;
+	esac
+done
+
+# No credentials yet: stay quiet so the cron entry does not log every run.
+if [ ! -r "$CONF" ] || ! grep -q '^AGH_PASS=.\+' "$CONF" 2>/dev/null; then
+	[ -t 1 ] && echo "no credentials in $CONF - nothing to do; see comments in $0" >&2
+	exit 0
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+: "${AGH_URL:?not set in $CONF}"
+: "${AGH_USER:?not set in $CONF}"
+: "${AGH_PASS:?not set in $CONF}"
+[ -f "$DB" ] || { echo "no $DB yet - run neigh6-hosts first" >&2; exit 1; }
+
+WORK=/tmp/.n6sync.$$
+mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+COOKIE=$WORK/cookie
+CLIENTS=$WORK/clients.json
+CUTOFF=$(( $(date +%s) - RETENTION_HOURS * 3600 ))
+
+# --- log in ------------------------------------------------------------------
+jq -n --arg n "$AGH_USER" --arg p "$AGH_PASS" '{name:$n,password:$p}' > "$WORK/login.json"
+code=$(curl -sS -o "$WORK/login.out" -w '%{http_code}' -c "$COOKIE" \
+	-H 'Content-Type: application/json' \
+	--data @"$WORK/login.json" "$AGH_URL/control/login")
+if [ "$code" != "200" ]; then
+	echo "login failed: HTTP $code" >&2
+	exit 1
+fi
+
+code=$(curl -sS -o "$CLIENTS" -w '%{http_code}' -b "$COOKIE" "$AGH_URL/control/clients")
+if [ "$code" != "200" ]; then
+	echo "GET /control/clients failed: HTTP $code" >&2
+	exit 1
+fi
+
+# --- inputs as JSON ----------------------------------------------------------
+awk -F'\t' -v cutoff="$CUTOFF" '$4 + 0 >= cutoff { print $1 "\t" $2 "\t" $3 }' "$DB" \
+	| jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {addr:.[0], mac:(.[1]|ascii_downcase), name:.[2]})' \
+	> "$WORK/db.json"
+
+[ -f "$STATE" ] || : > "$STATE"
+jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {client:.[0], addr:.[1]})' \
+	< "$STATE" > "$WORK/managed.json"
+
+# "AdGuard client name|dhcp hostname" pairs -> {client: [hostnames]}
+# Entries are ';'-separated (names can contain spaces).
+printf '%s' "$AGH_NAME_MAP" | tr ';' '\n' \
+	| jq -R -s 'split("\n") | map(select(length>0) | split("|") | {(.[0]): (.[1] | split(","))}) | add // {}' \
+	> "$WORK/namemap.json"
+
+# --- work out the new ids ----------------------------------------------------
+# For each client holding a MAC id: desired = every recorded address for those
+# MACs, minus any address another client already claims. Keep ids we did not
+# add; drop ours that are no longer current.
+jq -n \
+	--slurpfile db "$WORK/db.json" \
+	--slurpfile managed "$WORK/managed.json" \
+	--slurpfile clients "$CLIENTS" \
+	--slurpfile namemap "$WORK/namemap.json" \
+	--argjson adopt "$ADOPT" '
+	# OpenWrt jq is built without oniguruma, so no test()/match() here.
+	def is_mac: (length == 17) and ((split(":") | length) == 6);
+	def is_addr: (is_mac | not) and ((index(":") != null) or ((split(".") | length) == 4));
+
+	($db[0]) as $DB
+	| ($managed[0]) as $MAN
+	| ($clients[0].clients) as $CL
+	| ($namemap[0] // {}) as $NM
+	| [ $CL[] | . as $c | $c.ids[] | {id:., owner:$c.name} ] as $allids
+	| [ $CL[]
+		| . as $c
+		| ([$allids[] | select(.owner != $c.name) | .id | ascii_downcase]) as $taken
+		| ([$c.ids[] | select(is_mac) | ascii_downcase]) as $ownmacs
+		# Clients named in AGH_NAME_MAP follow a DHCP hostname, because their
+		# MAC rotates and the MAC anchor below could never catch up. Such
+		# clients are fully owned: their IP ids are reset to the current
+		# recorded addresses of the device every run.
+		| ($NM[$c.name] // []) as $names
+		# A client identified only by IP cannot follow a device across
+		# addresses. If one of its IPs is a MAC we know, adopt that MAC as a
+		# permanent anchor so every future address of the device matches.
+		# Skip MACs another client already claims - AdGuard rejects duplicates.
+		| (if ($names | length) > 0 then []
+		   elif ($ownmacs | length) > 0 then $ownmacs
+		   else [ $DB[] | select(.addr as $a | $c.ids | index($a)) | .mac ]
+			| unique
+			| map(select(. as $m | ($taken | index($m)) == null))
+		   end) as $macs
+		| select((($macs | length) > 0) or (($names | length) > 0))
+		| ($macs - $c.ids) as $seeded
+		| ([ $DB[]
+			| select(
+				if ($names | length) > 0
+				then (.name as $n | $names | index($n) != null)
+				else (.mac as $m | $macs | index($m) != null)
+				end)
+			| .addr ]
+			- $taken | unique) as $desired
+		| (if (($names | length) > 0) or ($adopt == 1)
+			then [$c.ids[] | select(is_addr)]
+			else [$MAN[] | select(.client == $c.name) | .addr]
+		   end) as $mine
+		| ([$c.ids[] | select(. as $i | ($mine | index($i)) == null)] + $desired + $seeded | unique) as $newids
+		# "managed" is what this script will own from now on: only the addresses it
+	# pushed, unless --adopt was given, in which case it takes over every IP id
+	# on the client so stale hand-added ones get retired too.
+	| (if (($names | length) > 0) or ($adopt == 1)
+		then [$newids[] | select(is_addr)]
+		else $desired end) as $owned
+	| {name: $c.name, ids: $newids, seeded: $seeded, changed: (($newids | sort) != ($c.ids | sort)), managed: $owned, data: ($c | .ids = $newids)}
+	  ]' > "$WORK/plan.json" || { echo "could not build the update plan" >&2; exit 1; }
+
+# --- apply -------------------------------------------------------------------
+rc=0
+changes=0
+count=$(jq 'length' "$WORK/plan.json" 2>/dev/null)
+[ -n "$count" ] || count=0
+i=0
+while [ "$i" -lt "$count" ]; do
+	entry=$(jq -c ".[$i]" "$WORK/plan.json")
+	i=$((i + 1))
+	name=$(printf '%s' "$entry" | jq -r '.name')
+	if [ "$(printf '%s' "$entry" | jq -r '.changed')" != "true" ]; then
+		continue
+	fi
+	changes=$((changes + 1))
+	if [ "$DRY" = "1" ]; then
+		printf '%s\n  ids -> %s\n' "$name" "$(printf '%s' "$entry" | jq -r '.ids | join(", ")')"
+		seeded=$(printf '%s' "$entry" | jq -r '.seeded | join(", ")')
+		[ -n "$seeded" ] && printf '  anchoring on MAC %s (inferred from its IP)\n' "$seeded"
+		continue
+	fi
+	printf '%s' "$entry" | jq -c '{name: .name, data: .data}' > "$WORK/update.json"
+	code=$(curl -sS -o "$WORK/update.out" -w '%{http_code}' -b "$COOKIE" \
+		-H 'Content-Type: application/json' \
+		--data @"$WORK/update.json" "$AGH_URL/control/clients/update")
+	if [ "$code" = "200" ]; then
+		logger -t neigh6-agh-sync "updated client '$name'"
+	else
+		# a duplicate id or a client edited in the UI meanwhile: report, keep going
+		logger -t neigh6-agh-sync "client '$name' update failed: HTTP $code $(head -c 200 "$WORK/update.out")"
+		echo "client '$name' update failed: HTTP $code" >&2
+		rc=1
+	fi
+done
+
+# Record what we now own, so the next run can retire it.
+if [ "$DRY" != "1" ] && [ "$rc" = "0" ]; then
+	jq -r '.[] | .name as $n | .managed[] | "\($n)\t\(.)"' \
+		"$WORK/plan.json" > "$STATE.new" && mv "$STATE.new" "$STATE"
+fi
+
+[ "$DRY" = "1" ] && echo "$changes client(s) would change"
+exit $rc

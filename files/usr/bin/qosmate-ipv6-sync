@@ -1,0 +1,50 @@
+#!/bin/sh
+# qosmate-ipv6-sync - keep the gaming PC's IPv6 addresses fresh in qosmate.
+#
+# The ISP may renew the PD prefix and Windows rotates its SLAAC privacy
+# address daily. The suffix-mask rules (::10 DHCP, EUI-64) survive both, but
+# full-address rules go stale whenever the prefix or privacy IID changes.
+# This rewrites the two *_ipv6_auto rules with the PC's current global
+# addresses from /opt/neigh6/db (maintained every minute by neigh6-hosts),
+# reloading qosmate only when the address list actually changed.
+#
+# Run from cron.
+
+set -u
+
+PC_MAC='04:7c:16:c3:5e:49'
+DB=/opt/neigh6/db
+LOG_TAG=qosmate-ipv6-sync
+STATE=/tmp/.qosmate-ipv6-addrs
+GAME_RULE=pc_gaming_udp_ipv6_auto
+QBIT_RULE=pc_qbit_bulk_ipv6_auto
+
+[ -f "$DB" ] || exit 0
+
+# qosmate rules are anonymous sections addressed by their option name.
+game_sec=$(uci show qosmate | sed -n "s/^qosmate\.\(@rule\[[0-9]*\]\)\.name='$GAME_RULE'/\1/p" | head -1)
+qbit_sec=$(uci show qosmate | sed -n "s/^qosmate\.\(@rule\[[0-9]*\]\)\.name='$QBIT_RULE'/\1/p" | head -1)
+[ -n "$game_sec" ] && [ -n "$qbit_sec" ] || exit 0
+
+# PC's current global IPv6 addresses from the neigh6 DB (TSV: addr, mac, name, last_seen).
+# Skip link-local and ULA (neither leaves via the WAN qdisc). Only addresses seen
+# recently count, so retired privacy addresses drop out instead of accumulating.
+addrs=$(awk -F'\t' -v mac="$PC_MAC" -v now="$(date +%s)" '
+	$2 == mac && $1 ~ /:/ && $1 !~ /^fe80:/ && $1 !~ /^fd/ && $4 + 7200 >= now { print $1 }
+' "$DB" | sort -u)
+
+[ -n "$addrs" ] || exit 0
+
+new=$(printf '%s\n' $addrs | tr '\n' ' ')
+[ -f "$STATE" ] && [ "$(cat "$STATE")" = "$new" ] && exit 0
+
+for sec in "$game_sec" "$qbit_sec"; do
+	uci -q delete "qosmate.$sec.src_ip"
+	for a in $addrs; do
+		uci add_list "qosmate.$sec.src_ip=$a"
+	done
+done
+uci commit qosmate
+/etc/init.d/qosmate restart
+printf '%s' "$new" > "$STATE"
+logger -t "$LOG_TAG" "updated IPv6 rules: $(printf '%s' "$addrs" | tr '\n' ' ')"

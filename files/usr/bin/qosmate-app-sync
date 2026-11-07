@@ -1,0 +1,40 @@
+#!/bin/sh
+# qosmate-app-sync - refresh qosmate classification sets from DNS.
+#
+# Resolves Steam and Discord hostnames through the router's resolver
+# (AdGuardHome on 127.0.0.1) and repopulates the qosmate nftables sets:
+#   steam_cdn   / steam_cdn6   -> cs1 (Bulk)    : Steam content downloads
+#   discord_pri / discord_pri6 -> cs4 (Video)   : Discord, below gaming (cs5)
+#
+# The sets and the rules that reference them live in /etc/config/qosmate;
+# this script only refreshes the IP lists. Run from cron.
+
+set -u
+
+DNS=127.0.0.1
+NFT_TABLE=dscptag
+TTL=1h
+LOG_TAG=qosmate-app-sync
+
+STEAM_DOMAINS="cdn.steamstatic.com steamstatic.com steamgames.com steampowered.com steamcommunity.com steam-chat.com steamdeck.com steamcdn-a.akamaihd.net steampipe.akamaized.net steambroadcast.akamaized.net steamvideo.akamaized.net steamcontent.com steamserver.net steamusercontent.com valve.net edge.steam-dns.top"
+DISCORD_DOMAINS="discord.com discordapp.com discord.gg discordapp.net discord.media discordcdn.com discordactivities.com discord.co discord.new gateway.discord.gg cdn.discordapp.com media.discordapp.net"
+
+resolve() {
+	nslookup "$1" "$DNS" 2>/dev/null | awk '$1 == "Address:" { print $2 }' | grep -v ':53$'
+}
+
+feed() {
+	set4="$1"; set6="$2"; shift 2
+	ips=$(for d in $*; do resolve "$d"; done | sort -u)
+	n4=0; n6=0
+	for ip in $ips; do
+		case "$ip" in
+			*:*) nft add element inet "$NFT_TABLE" "$set6" { "$ip" timeout "$TTL" } 2>/dev/null && n6=$((n6 + 1)) ;;
+			*)   nft add element inet "$NFT_TABLE" "$set4" { "$ip" timeout "$TTL" } 2>/dev/null && n4=$((n4 + 1)) ;;
+		esac
+	done
+	logger -t "$LOG_TAG" "refreshed $set4 (+$n4) $set6 (+$n6)"
+}
+
+feed steam_cdn steam_cdn6 $STEAM_DOMAINS
+feed discord_pri discord_pri6 $DISCORD_DOMAINS

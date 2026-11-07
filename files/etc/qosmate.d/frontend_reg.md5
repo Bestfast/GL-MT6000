@@ -1,0 +1,14 @@
+f0ed6180fe7e85ffe5390f159d4706cf  /usr/share/luci/menu.d/luci-app-qosmate.json
+299399b2b8f7b65bef652469f478c809  /usr/share/rpcd/acl.d/luci-app-qosmate.json
+b8e09affa4c13f5392724b6a4e82f5e0  /usr/libexec/rpcd/luci.qosmate
+38a2d13916ad698f16b831f427d1672b  /usr/libexec/rpcd/luci.qosmate_stats
+106c19bd3de14821c1dcda74c714eda9  /www/luci-static/resources/view/qosmate/settings.js
+2eb57a82b512614b5bcfeb34a53f2e43  /www/luci-static/resources/view/qosmate/hfsc.js
+48c85432c1e2407dbf93c41dde7e1825  /www/luci-static/resources/view/qosmate/cake.js
+f16cf91781182900c1fc2831186c4663  /www/luci-static/resources/view/qosmate/advanced.js
+a1539e8710d7c6f3cb31ab5f0fdf21e4  /www/luci-static/resources/view/qosmate/rules.js
+61e055dc3a5252bb89a9875bc26d9f81  /www/luci-static/resources/view/qosmate/ratelimits.js
+c80e38cf0eaee9e4d1a5734e3d9cdd50  /www/luci-static/resources/view/qosmate/connections.js
+f7fbded58a4722b1d2758ddfebf27cec  /www/luci-static/resources/view/qosmate/custom_rules.js
+b8ff1d9f9fe034118565f976b25cf30d  /www/luci-static/resources/view/qosmate/ipsets.js
+18fa289f2b72893b6bfa34bd51a5c3ea  /www/luci-static/resources/view/qosmate/statistics.js

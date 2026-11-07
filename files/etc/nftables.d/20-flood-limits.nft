@@ -1,0 +1,41 @@
+## WAN malformed-packet drops.
+##
+## Added when banIP was retired in favour of running CrowdSec alone on this
+## router. CrowdSec bans known-bad *addresses*; it has no packet-level concept,
+## so these cover the class of traffic an address-based blocklist cannot see.
+##
+## Deliberately does NOT port banIP's rate limits (ban_synlimit=10,
+## ban_udplimit=100). This router forwards 443 to npm.lan and forwards
+## Parsec (8000-8010) and Apollo (47989, 47998-48010) for game streaming.
+## A 10/second inbound SYN cap is low for a host serving 443, and a dropped
+## packet on a game stream is immediately noticeable. Volumetric floods would
+## saturate the ISP link before the router became the bottleneck anyway, so
+## the limits cost real latency risk for little practical gain here.
+##
+## Every rule below matches only packets that are already malformed. No
+## legitimate flow produces them, so nothing here can slow normal traffic.
+##
+## Priority -150 runs this ahead of fw4's filter chains (priority 0) and the
+## CrowdSec bouncer chains (priority 4).
+
+chain wan_flood_guard {
+    type filter hook prerouting priority -150; policy accept;
+
+    # LAN traffic is never examined here.
+    iifname != "eth1" accept
+
+    # Established flows short-circuit immediately: this is where all real
+    # throughput lives (downloads, streams, and the replies to any connection
+    # this network opened outbound). Nothing below can touch it.
+    ct state established,related accept
+
+    # Conntrack-invalid: not part of any tracked flow.
+    ct state invalid counter drop
+
+    # Malformed TCP flag combinations used by port scanners
+    # (nmap null / xmas / synfin and friends).
+    tcp flags & (fin|syn) == (fin|syn) counter drop
+    tcp flags & (syn|rst) == (syn|rst) counter drop
+    tcp flags & (fin|syn|rst|psh|ack|urg) < fin counter drop
+    tcp flags & (fin|syn|rst|psh|ack|urg) == (fin|psh|urg) counter drop
+}

@@ -1,0 +1,24 @@
+# AdGuardHome API credentials for the neigh6 scripts (neigh6-agh-sync,
+# neigh6-agh-new).  Not committed with real values - copy to
+# /etc/neigh6.conf on the router, chmod 600.
+#
+# The same values live in npm-site/.env as ADGUARD_URL / ADGUARD_USER /
+# ADGUARD_PASS, which is where to read them from.
+#
+# If AGH_PASS is empty or missing, neigh6-agh-sync exits 0 silently so the
+# cron entry stays quiet.
+
+AGH_URL=http://10.10.10.1:8080
+AGH_USER=
+AGH_PASS=
+
+# neigh6-agh-new only: hostnames to leave alone when creating clients.
+# Space-separated.
+# NEW_CLIENT_SKIP="npm documents"
+
+# neigh6-agh-sync: devices whose MAC rotates (iOS Private Wi-Fi Address) cannot
+# be tracked by MAC. List "AdGuard client name|dhcp hostname" pairs here and the
+# client will follow the hostname instead. ';'-separated (names may contain
+# spaces); comma-separate several hostnames for one client. Such clients are
+# fully owned by the script (stale IP ids are retired automatically).
+# AGH_NAME_MAP="iPad Gabriele|iPad"
